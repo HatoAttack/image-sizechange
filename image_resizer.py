@@ -19,6 +19,12 @@ APP_TITLE = "画像リサイズ変換（JPG / PNG）"
 
 SIZE_PRESETS = [1600, 1200, 600, 560]
 
+# 「任意」ラジオボタンを表す値（プリセットと重複しない番兵値）
+CUSTOM_SIZE = 0
+
+# 長辺として指定できる最大値（JPEG 形式の上限に合わせる）
+MAX_LONG_EDGE = 65500
+
 RESAMPLE_METHODS = {
     "Bilinear": Image.BILINEAR,
     "Bicubic": Image.BICUBIC,
@@ -188,6 +194,16 @@ class App(tk.Tk):
         for s in SIZE_PRESETS:
             ttk.Radiobutton(size_row, text=f"長辺 {s}px", value=s,
                             variable=self.size_var).pack(side="left", padx=6)
+        ttk.Radiobutton(size_row, text="任意:", value=CUSTOM_SIZE,
+                        variable=self.size_var).pack(side="left", padx=(6, 0))
+        self.custom_size_var = tk.StringVar()
+        custom_entry = ttk.Entry(size_row, textvariable=self.custom_size_var,
+                                 width=7, justify="right")
+        custom_entry.pack(side="left")
+        ttk.Label(size_row, text="px").pack(side="left", padx=(2, 6))
+        # 入力欄に触れたら自動で「任意」を選択する
+        custom_entry.bind("<FocusIn>",
+                          lambda _e: self.size_var.set(CUSTOM_SIZE))
 
         algo_row = ttk.Frame(conv)
         algo_row.pack(fill="x", **pad)
@@ -291,8 +307,20 @@ class App(tk.Tk):
             return
         out_dir = Path(out_dir_s)
 
+        long_edge = self.size_var.get()
+        if long_edge == CUSTOM_SIZE:
+            try:
+                long_edge = int(self.custom_size_var.get().strip())
+            except ValueError:
+                long_edge = 0
+            if not (1 <= long_edge <= MAX_LONG_EDGE):
+                messagebox.showerror(
+                    APP_TITLE,
+                    f"任意サイズには 1〜{MAX_LONG_EDGE} の整数を入力してください。")
+                return
+
         opts = ConvertOptions(
-            long_edge=self.size_var.get(),
+            long_edge=long_edge,
             resample=RESAMPLE_METHODS[self.algo_var.get()],
             lowercase=self.lowercase_var.get(),
             replace_search=self.replace_search.get(),
