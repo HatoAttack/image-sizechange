@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # 動作確認用の手動実行（ビルドまで行い、リリースは作成しない）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: テスト実行
+        run: dotnet run --project csharp/ImageResizer.Tests
+
+      - name: ビルド（自己完結型・単一exe）
+        run: >
+          dotnet publish csharp/ImageResizer -c Release -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+
+      - name: リリース作成・exe添付
+        if: startsWith(github.ref, 'refs/tags/')
+        run: >
+          gh release create ${{ github.ref_name }}
+          csharp/ImageResizer/bin/Release/net8.0-windows/win-x64/publish/ImageResizer.exe
+          --title ${{ github.ref_name }}
+          --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
