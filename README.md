@@ -8,7 +8,7 @@
 
 ### C# 版（推奨・インストール不要）
 
-[ImageResizer.exe](ImageResizer.exe) をダブルクリックするだけ。ランタイム等のインストールは不要で、この exe 1個を他の PC にコピーしても動きます。
+[Releases](https://github.com/HatoAttack/image-sizechange/releases) から `ImageResizer.exe` をダウンロードしてダブルクリックするだけ。ランタイム等のインストールは不要で、この exe 1個を他の PC にコピーしても動きます。
 
 ソースは `csharp/` 以下（.NET 8 + WinForms + ImageSharp）。再ビルドは:
 
