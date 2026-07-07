@@ -1,0 +1,13 @@
+# ローカル設定
+.claude/
+
+# .NET build output
+csharp/**/bin/
+csharp/**/obj/
+
+# Python
+__pycache__/
+*.pyc
+
+# ビルド済み exe はリポジトリに含めず GitHub Releases で配布する
+ImageResizer.exe
