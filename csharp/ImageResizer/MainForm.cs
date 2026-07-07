@@ -8,6 +8,17 @@ public class MainForm : Form
     private readonly TextBox _txtInDir = new() { Dock = DockStyle.Fill };
     private readonly TextBox _txtOutDir = new() { Dock = DockStyle.Fill };
     private readonly List<(RadioButton Rb, int Size)> _sizeRadios = new();
+    private readonly RadioButton _rbCustomSize = new()
+    {
+        Text = "任意:", AutoSize = true, Margin = new Padding(6, 3, 0, 3),
+    };
+    private readonly NumericUpDown _numCustomSize = new()
+    {
+        // 上限は JPEG 形式で扱える寸法に合わせる
+        Minimum = 1, Maximum = 65500, Value = 800,
+        Width = 70, TextAlign = HorizontalAlignment.Right,
+        Margin = new Padding(0, 1, 2, 3),
+    };
     private readonly List<(RadioButton Rb, string Name)> _algoRadios = new();
     private readonly CheckBox _chkNoUpscale = new()
     {
@@ -140,6 +151,14 @@ public class MainForm : Form
             _sizeRadios.Add((rb, s));
             sizeRow.Controls.Add(rb);
         }
+        sizeRow.Controls.Add(_rbCustomSize);
+        sizeRow.Controls.Add(_numCustomSize);
+        sizeRow.Controls.Add(new Label
+        {
+            Text = "px", AutoSize = true, Margin = new Padding(0, 6, 6, 3),
+        });
+        // 入力欄に触れたら自動で「任意」を選択する
+        _numCustomSize.Enter += (_, _) => _rbCustomSize.Checked = true;
 
         var algoRow = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Dock = DockStyle.Fill };
         algoRow.Controls.Add(MakeLabel("アルゴリズム:"));
@@ -280,9 +299,12 @@ public class MainForm : Form
         }
 
         string algoName = _algoRadios.First(a => a.Rb.Checked).Name;
+        int longEdge = _rbCustomSize.Checked
+            ? (int)_numCustomSize.Value
+            : _sizeRadios.First(s => s.Rb.Checked).Size;
         var opts = new ConvertOptions
         {
-            LongEdge = _sizeRadios.First(s => s.Rb.Checked).Size,
+            LongEdge = longEdge,
             Algorithm = algoName,
             Lowercase = _chkLowercase.Checked,
             ReplaceSearch = _txtReplaceSearch.Text,

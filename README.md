@@ -27,7 +27,7 @@ dotnet publish csharp/ImageResizer -c Release -r win-x64 --self-contained true -
 | 項目 | 内容 |
 |---|---|
 | 入力 | フォルダ単位（フォルダ直下の `.jpg` `.jpeg` `.png` が対象） |
-| サイズ | 長辺 1600 / 1200 / 600 / 560 px から選択 |
+| サイズ | 長辺 1600 / 1200 / 600 / 560 px から選択、または任意のピクセル数を直接指定 |
 | アルゴリズム | Bilinear / Bicubic / Lanczos から選択 |
 | ファイル名処理 | 小文字化（拡張子含む）・文字列置換・末尾に任意文字列付与 |
 | 出力先 | 任意のフォルダを選択可能 |
