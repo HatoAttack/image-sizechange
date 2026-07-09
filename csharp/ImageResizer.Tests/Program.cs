@@ -7,6 +7,7 @@ using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Formats.Png.Chunks;
 using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 using Image = SixLabors.ImageSharp.Image;
 
 Console.OutputEncoding = Encoding.UTF8;
@@ -123,6 +124,95 @@ using (var img = Image.Load(Path.Combine(outKeep, "photo_xyz_s.jpg")))
     if (img.Metadata.ExifProfile?.TryGetValue(ExifTag.Make, out var v) == true)
         make = v.Value;
     Check(make == "TestMaker", $"削除オフ時はEXIF保持: Make={make}");
+}
+
+// ================ Combiner / Cropper（連結・切り抜き）のテスト ================
+// Python 版 image_editor.py のテストと同じ期待値
+
+Image<Rgba32> Mk(int w, int h, byte r, byte g, byte b) =>
+    new(w, h, new Rgba32(r, g, b, 255));
+
+{
+    using var a = Mk(100, 200, 255, 0, 0);
+    using var b = Mk(300, 150, 0, 255, 0);
+    using var c = Mk(120, 120, 0, 0, 255);
+    var imgs = new List<Image<Rgba32>> { a, b, c };
+    var white = new Rgba32(255, 255, 255, 255);
+    var clear = new Rgba32(0, 0, 0, 0);
+
+    // 横連結 高さを最大に揃え、間隔10 余白5 中央整列
+    using (var img = Combiner.CombineLinear(imgs, true, "max", 0, "center", 10, 5, white))
+        Check(img.Width == 730 && img.Height == 210,
+              $"横連結(max): {img.Width}x{img.Height} (期待 730x210)");
+
+    // 縦連結 そのまま 左寄せ
+    using (var img = Combiner.CombineLinear(imgs, false, "none", 0, "start", 0, 0, clear))
+        Check(img.Width == 300 && img.Height == 470,
+              $"縦連結(none): {img.Width}x{img.Height} (期待 300x470)");
+
+    // 指定px 揃え（高さ100）
+    using (var img = Combiner.CombineLinear(imgs, true, "fixed", 100, "start", 0, 0, white))
+        Check(img.Width == 350 && img.Height == 100,
+              $"横連結(fixed100): {img.Width}x{img.Height} (期待 350x100)");
+
+    // グリッド 2列 元最大 間隔4 余白2
+    using (var img = Combiner.CombineGrid(imgs, 2, "none", 0, 4, 2, white))
+        Check(img.Width == 608 && img.Height == 408,
+              $"グリッド2列(none): {img.Width}x{img.Height} (期待 608x408)");
+
+    // グリッド 3列 セル150角
+    using (var img = Combiner.CombineGrid(imgs, 3, "fixed", 150, 0, 0, clear))
+        Check(img.Width == 450 && img.Height == 150,
+              $"グリッド3列(fixed150): {img.Width}x{img.Height} (期待 450x150)");
+}
+
+// 色パース
+{
+    var col = Combiner.ParseColor("#f80", false);
+    Check(col is { R: 255, G: 136, B: 0, A: 255 }, $"色 #f80: ({col.R},{col.G},{col.B},{col.A})");
+    var tr = Combiner.ParseColor("#ffffff", true);
+    Check(tr.A == 0, $"透過指定: A={tr.A}");
+}
+
+// 保存（JPEG の透過フラット化 / PNG / WEBP）
+{
+    string saveDir = Path.Combine(baseDir, "combine_save");
+    Directory.CreateDirectory(saveDir);
+    using var img = new Image<Rgba32>(60, 40, new Rgba32(255, 0, 0, 128));
+    foreach (string name in new[] { "out.png", "out.jpg", "out.webp" })
+    {
+        string dst = Path.Combine(saveDir, name);
+        Combiner.SaveByExtension(img, dst);
+        using var loaded = Image.Load(dst);
+        Check(loaded.Width == 60 && loaded.Height == 40,
+              $"保存/再読込 {name}: {loaded.Width}x{loaded.Height}");
+    }
+}
+
+// Cropper: 中央矩形とアスペクト反転
+{
+    var (x, y, w, h) = Cropper.CenterRect(400, 300, 1.0);
+    Check(x == 50 && y == 0 && w == 300 && h == 300,
+          $"CenterRect 1:1 (400x300): x={x} y={y} {w}x{h} (期待 50,0,300x300)");
+
+    var r169 = Cropper.CenterRect(400, 300, 16.0 / 9);
+    Check(r169.W == 400 && Math.Abs(r169.H - 225) < 0.01 && Math.Abs(r169.Y - 37.5) < 0.01,
+          $"CenterRect 16:9: y={r169.Y} {r169.W}x{r169.H} (期待 37.5, 400x225)");
+
+    Check(Math.Abs((Cropper.Flip(4.0 / 3, true) ?? 0) - 0.75) < 1e-9, "反転 4:3 → 3:4 (0.75)");
+    Check(Cropper.Flip(null, true) is null, "自由比は反転の影響なし");
+
+    // 実クロップ: 400x300 を 1:1 中央 → 300x300
+    string cropDir = Path.Combine(baseDir, "crop_save");
+    Directory.CreateDirectory(cropDir);
+    using var src = Mk(400, 300, 255, 128, 0);
+    var box = Cropper.ClampBox(x, y, x + w, y + h, 400, 300);
+    src.Mutate(m => m.Crop(box));
+    string cropDst = Path.Combine(cropDir, "center_crop.png");
+    Combiner.SaveByExtension(src, cropDst);
+    using (var loaded = Image.Load(cropDst))
+        Check(loaded.Width == 300 && loaded.Height == 300,
+              $"1:1 中央クロップ保存: {loaded.Width}x{loaded.Height}");
 }
 
 Console.WriteLine();
