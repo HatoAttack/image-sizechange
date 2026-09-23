@@ -21,6 +21,12 @@ from PIL import Image, ImageOps, ImageTk
 
 import image_resizer as R
 
+# ドラッグ＆ドロップ（任意依存: pip install tkinterdnd2。無ければD&Dなしで動作）
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except ImportError:
+    DND_FILES = TkinterDnD = None
+
 APP_TITLE = "画像ツール（リサイズ・切り抜き・連結）"
 
 TARGET_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
@@ -276,6 +282,12 @@ class CropTab(ttk.Frame):
         ttk.Entry(of, textvariable=self.out_dir).pack(fill="x", padx=4, pady=2)
         ttk.Button(of, text="参照...", command=self._browse_out).pack(fill="x", padx=4, pady=(0, 4))
 
+        # 画像ファイル/フォルダのドラッグ＆ドロップ（tkinterdnd2 がある場合のみ）
+        if getattr(self.winfo_toplevel(), "dnd_ok", False):
+            for w in (self, self.canvas):
+                w.drop_target_register(DND_FILES)
+                w.dnd_bind("<<Drop>>", self._on_drop)
+
     # ---- ファイル操作 ----
     def _open(self):
         files = filedialog.askopenfilenames(
@@ -283,11 +295,31 @@ class CropTab(ttk.Frame):
             filetypes=[("画像", "*.jpg *.jpeg *.png *.webp *.bmp *.gif"), ("すべて", "*.*")])
         if not files:
             return
-        self.paths = [Path(f) for f in files]
+        self._set_paths([Path(f) for f in files])
+
+    def _set_paths(self, paths: list[Path]):
+        self.paths = paths
         self.index = 0
         if not self.out_dir.get():
             self.out_dir.set(str(self.paths[0].parent / "cropped"))
         self._load_current()
+
+    def _on_drop(self, event):
+        """ドロップされたファイル/フォルダから対象画像を読み込む（フォルダは直下のみ）。"""
+        paths: list[Path] = []
+        for s in self.tk.splitlist(event.data):
+            p = Path(s)
+            if p.is_dir():
+                paths += sorted((f for f in p.iterdir()
+                                 if f.is_file() and f.suffix.lower() in TARGET_EXTS),
+                                key=lambda f: f.name.lower())
+            elif p.is_file() and p.suffix.lower() in TARGET_EXTS:
+                paths.append(p)
+        if not paths:
+            messagebox.showinfo(APP_TITLE, "対応する画像ファイルがありません。")
+            return event.action
+        self._set_paths(paths)
+        return event.action
 
     def _step(self, delta):
         if not self.paths:
@@ -1052,6 +1084,13 @@ class ResizeTab(ttk.Frame):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.dnd_ok = False
+        if TkinterDnD is not None:
+            try:
+                TkinterDnD._require(self)
+                self.dnd_ok = True
+            except (tk.TclError, RuntimeError):
+                pass
         self.title(APP_TITLE)
         self.geometry("980x680")
         self.minsize(820, 560)
