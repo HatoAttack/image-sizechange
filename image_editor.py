@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """画像ツール（リサイズ・切り抜き・連結）
 
-- リサイズ: フォルダ内の JPG/PNG を長辺指定で一括リサイズする
-  （従来ツール image_resizer.py の処理コアをタブとして統合）。
+- リサイズ: フォルダ内の JPG/PNG/WEBP を長辺指定で一括リサイズし、出力形式を
+  JPG / PNG / WEBP へ変換する（従来ツール image_resizer.py の処理コアをタブとして統合）。
 - 切り抜き: 画像をマウスで範囲選択し、自由 / 固定 / 任意のアスペクト比で
   クロップして保存する。
 - 連結: 複数の画像を横・縦・グリッドに1枚へ連結する（間隔・余白・背景色・
@@ -20,6 +20,12 @@ from tkinter import ttk, filedialog, messagebox, colorchooser, scrolledtext
 from PIL import Image, ImageOps, ImageTk
 
 import image_resizer as R
+
+# ドラッグ＆ドロップ（任意依存: pip install tkinterdnd2。無ければD&Dなしで動作）
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except ImportError:
+    DND_FILES = TkinterDnD = None
 
 APP_TITLE = "画像ツール（リサイズ・切り抜き・連結）"
 
@@ -276,6 +282,12 @@ class CropTab(ttk.Frame):
         ttk.Entry(of, textvariable=self.out_dir).pack(fill="x", padx=4, pady=2)
         ttk.Button(of, text="参照...", command=self._browse_out).pack(fill="x", padx=4, pady=(0, 4))
 
+        # 画像ファイル/フォルダのドラッグ＆ドロップ（tkinterdnd2 がある場合のみ）
+        if getattr(self.winfo_toplevel(), "dnd_ok", False):
+            for w in (self, self.canvas):
+                w.drop_target_register(DND_FILES)
+                w.dnd_bind("<<Drop>>", self._on_drop)
+
     # ---- ファイル操作 ----
     def _open(self):
         files = filedialog.askopenfilenames(
@@ -283,11 +295,31 @@ class CropTab(ttk.Frame):
             filetypes=[("画像", "*.jpg *.jpeg *.png *.webp *.bmp *.gif"), ("すべて", "*.*")])
         if not files:
             return
-        self.paths = [Path(f) for f in files]
+        self._set_paths([Path(f) for f in files])
+
+    def _set_paths(self, paths: list[Path]):
+        self.paths = paths
         self.index = 0
         if not self.out_dir.get():
             self.out_dir.set(str(self.paths[0].parent / "cropped"))
         self._load_current()
+
+    def _on_drop(self, event):
+        """ドロップされたファイル/フォルダから対象画像を読み込む（フォルダは直下のみ）。"""
+        paths: list[Path] = []
+        for s in self.tk.splitlist(event.data):
+            p = Path(s)
+            if p.is_dir():
+                paths += sorted((f for f in p.iterdir()
+                                 if f.is_file() and f.suffix.lower() in TARGET_EXTS),
+                                key=lambda f: f.name.lower())
+            elif p.is_file() and p.suffix.lower() in TARGET_EXTS:
+                paths.append(p)
+        if not paths:
+            messagebox.showinfo(APP_TITLE, "対応する画像ファイルがありません。")
+            return event.action
+        self._set_paths(paths)
+        return event.action
 
     def _step(self, delta):
         if not self.paths:
@@ -858,8 +890,20 @@ class ResizeTab(ttk.Frame):
                                  width=7, justify="right")
         custom_entry.pack(side="left")
         ttk.Label(size_row, text="px").pack(side="left", padx=(2, 6))
+        ttk.Radiobutton(size_row, text="変更しない", value=R.KEEP_SIZE,
+                        variable=self.size_var).pack(side="left", padx=6)
         custom_entry.bind("<FocusIn>",
                           lambda _e: self.size_var.set(R.CUSTOM_SIZE))
+
+        fmt_row = ttk.Frame(conv)
+        fmt_row.pack(fill="x", **pad)
+        ttk.Label(fmt_row, text="出力形式:").pack(side="left")
+        self.format_var = tk.StringVar(value=R.FORMAT_KEEP)
+        for label, value in R.FORMAT_LABELS:
+            ttk.Radiobutton(fmt_row, text=label, value=value,
+                            variable=self.format_var).pack(side="left", padx=6)
+        ttk.Label(fmt_row, text="（JPGへの変換では透過部分を白で塗りつぶします）").pack(
+            side="left", padx=(6, 0))
 
         algo_row = ttk.Frame(conv)
         algo_row.pack(fill="x", **pad)
@@ -977,6 +1021,7 @@ class ResizeTab(ttk.Frame):
             overwrite=self.overwrite_var.get(),
             no_upscale=self.no_upscale_var.get(),
             strip_metadata=self.strip_meta_var.get(),
+            out_format=self.format_var.get(),
         )
 
         if (in_dir.resolve() == out_dir.resolve() and opts.overwrite):
@@ -990,7 +1035,7 @@ class ResizeTab(ttk.Frame):
         self.run_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         self.status_var.set("処理中...")
-        self._log(f"=== 変換開始: 長辺{opts.long_edge}px / {self.algo_var.get()} ===")
+        self._log(f"=== 変換開始: {R.describe_options(opts, self.algo_var.get())} ===")
 
         def report(kind, *args):
             self.msg_queue.put((kind, args))
@@ -1039,6 +1084,13 @@ class ResizeTab(ttk.Frame):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.dnd_ok = False
+        if TkinterDnD is not None:
+            try:
+                TkinterDnD._require(self)
+                self.dnd_ok = True
+            except (tk.TclError, RuntimeError):
+                pass
         self.title(APP_TITLE)
         self.geometry("980x680")
         self.minsize(820, 560)

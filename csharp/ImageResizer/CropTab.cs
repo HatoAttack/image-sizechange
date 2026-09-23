@@ -13,6 +13,12 @@ public class CropTab : TabPage
     private static readonly string ImageFilter =
         "画像|*.jpg;*.jpeg;*.png;*.webp;*.bmp;*.gif|すべて|*.*";
 
+    // ドラッグ＆ドロップで受け付ける拡張子
+    private static readonly HashSet<string> ImageExts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif",
+    };
+
     // 画像状態
     private readonly List<string> _paths = new();
     private int _index = -1;
@@ -74,6 +80,11 @@ public class CropTab : TabPage
     {
         Text = "切り抜き";
         UseVisualStyleBackColor = true;
+
+        // タブ全体（キャンバス含む）で画像ファイル/フォルダのドロップを受け付ける
+        AllowDrop = true;
+        DragEnter += OnDragEnter;
+        DragDrop += OnDragDrop;
 
         var root = new TableLayoutPanel
         {
@@ -206,13 +217,62 @@ public class CropTab : TabPage
         };
         if (dlg.ShowDialog(this) != DialogResult.OK)
             return;
+        SetPaths(dlg.FileNames);
+    }
+
+    private void SetPaths(IReadOnlyList<string> paths)
+    {
         _paths.Clear();
-        _paths.AddRange(dlg.FileNames);
+        _paths.AddRange(paths);
         _index = 0;
         if (_txtOutDir.Text.Length == 0)
             _txtOutDir.Text = Path.Combine(
                 Path.GetDirectoryName(_paths[0]) ?? "", "cropped");
         LoadCurrent();
+    }
+
+    // ドロップされたファイル/フォルダから対象画像を列挙（フォルダは直下のみ）
+    private static List<string> CollectImages(IEnumerable<string> dropped)
+    {
+        var result = new List<string>();
+        foreach (var p in dropped)
+        {
+            if (Directory.Exists(p))
+                result.AddRange(Directory.EnumerateFiles(p)
+                    .Where(f => ImageExts.Contains(Path.GetExtension(f)))
+                    .OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
+            else if (File.Exists(p) && ImageExts.Contains(Path.GetExtension(p)))
+                result.Add(p);
+        }
+        return result;
+    }
+
+    private static string[]? DroppedPaths(DragEventArgs e) =>
+        e.Data?.GetDataPresent(DataFormats.FileDrop) == true
+            ? e.Data.GetData(DataFormats.FileDrop) as string[]
+            : null;
+
+    private void OnDragEnter(object? sender, DragEventArgs e)
+    {
+        var dropped = DroppedPaths(e);
+        e.Effect = dropped is not null && CollectImages(dropped).Count > 0
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+    }
+
+    private void OnDragDrop(object? sender, DragEventArgs e)
+    {
+        var dropped = DroppedPaths(e);
+        if (dropped is null)
+            return;
+        var images = CollectImages(dropped);
+        if (images.Count == 0)
+        {
+            MessageBox.Show(this, "対応する画像ファイルがありません。",
+                MainForm.AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        SetPaths(images);
     }
 
     private void Step(int delta)

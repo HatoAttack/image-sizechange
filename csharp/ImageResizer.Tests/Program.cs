@@ -5,6 +5,7 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Formats.Png.Chunks;
+using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
@@ -25,11 +26,13 @@ void Check(bool cond, string msg)
 
 ConvertOptions Opts(int longEdge = 1200, string algo = "Lanczos",
     bool lowercase = true, string search = "ABC", string with = "xyz",
-    string suffix = "_s", bool overwrite = false, bool strip = true) => new()
+    string suffix = "_s", bool overwrite = false, bool strip = true,
+    OutputFormat format = OutputFormat.Keep) => new()
 {
     LongEdge = longEdge, Algorithm = algo, Lowercase = lowercase,
     ReplaceSearch = search, ReplaceWith = with, Suffix = suffix,
     Overwrite = overwrite, NoUpscale = true, StripMetadata = strip,
+    Format = format,
 };
 
 ConvertStats Run(string outPath, ConvertOptions opts) =>
@@ -59,6 +62,9 @@ using (var img = new Image<Rgba32>(800, 1900, new Rgba32(0, 255, 0, 128)))
 // 小さいJPG 400x300（拡大しない対象）
 using (var img = new Image<Rgb24>(400, 300, new Rgb24(0, 0, 255)))
     img.Save(Path.Combine(inDir, "small.jpg"), new JpegEncoder());
+// 半透明WEBP 1400x700（WEBP 入力の対象確認用）
+using (var img = new Image<Rgba32>(1400, 700, new Rgba32(0, 255, 0, 128)))
+    img.Save(Path.Combine(inDir, "shot.webp"), new WebpEncoder { Quality = 95 });
 // 対象外ファイル
 File.WriteAllText(Path.Combine(inDir, "note.txt"), "ignore me");
 
@@ -71,11 +77,12 @@ using (var img = Image.Load(Path.Combine(inDir, "PHOTO_ABC.JPG")))
 
 // ---- 1回目: 変換（小文字化+置換+末尾付与、メタデータ削除ON） ----
 var stats = Run(outDir, Opts());
-Check(stats is { Total: 3, Converted: 3, Skipped: 0, Error: 0 },
+Check(stats is { Total: 4, Converted: 4, Skipped: 0, Error: 0 },
       $"1回目 stats: 変換{stats.Converted} スキップ{stats.Skipped} エラー{stats.Error}");
 
 var names = Directory.GetFiles(outDir).Select(Path.GetFileName).OrderBy(n => n).ToArray();
-Check(names.SequenceEqual(new[] { "photo_xyz_s.jpg", "sample_img_s.png", "small_s.jpg" }),
+Check(names.SequenceEqual(new[]
+      { "photo_xyz_s.jpg", "sample_img_s.png", "shot_s.webp", "small_s.jpg" }),
       $"出力ファイル名（小文字化+置換+末尾付与）: {string.Join(", ", names)}");
 
 using (var img = Image.Load(Path.Combine(outDir, "photo_xyz_s.jpg")))
@@ -93,14 +100,21 @@ using (var img = Image.Load(Path.Combine(outDir, "sample_img_s.png")))
 }
 using (var img = Image.Load(Path.Combine(outDir, "small_s.jpg")))
     Check(img.Width == 400 && img.Height == 300, $"小画像は拡大しない: {img.Width}x{img.Height}");
+// WEBP は入力対象であり、「元のまま」では WEBP として保存される
+using (var img = Image.Load(Path.Combine(outDir, "shot_s.webp")))
+{
+    Check(img.Width == 1200 && img.Height == 600, $"WEBP 長辺1200: {img.Width}x{img.Height}");
+    Check(img.Metadata.DecodedImageFormat is WebpFormat,
+          $"元のままなら WEBP のまま: {img.Metadata.DecodedImageFormat?.Name}");
+}
 
 // ---- 2回目: 同名スキップ ----
 stats = Run(outDir, Opts());
-Check(stats is { Converted: 0, Skipped: 3 }, $"同名スキップ: スキップ{stats.Skipped}");
+Check(stats is { Converted: 0, Skipped: 4 }, $"同名スキップ: スキップ{stats.Skipped}");
 
 // ---- 3回目: 上書き（サイズ600） ----
 stats = Run(outDir, Opts(longEdge: 600, overwrite: true));
-Check(stats.Converted == 3, $"上書き: 変換{stats.Converted}");
+Check(stats.Converted == 4, $"上書き: 変換{stats.Converted}");
 using (var img = Image.Load(Path.Combine(outDir, "photo_xyz_s.jpg")))
     Check(img.Width == 600 && img.Height == 300, $"上書き後 長辺600: {img.Width}x{img.Height}");
 
@@ -110,8 +124,9 @@ foreach (string algo in new[] { "Bilinear", "Bicubic" })
     string out2 = Path.Combine(baseDir, "out_" + algo);
     stats = Run(out2, Opts(algo: algo, lowercase: false, search: "", with: "", suffix: ""));
     var names2 = Directory.GetFiles(out2).Select(Path.GetFileName).OrderBy(n => n).ToArray();
-    Check(stats.Converted == 3 &&
-          names2.SequenceEqual(new[] { "PHOTO_ABC.JPG", "Sample_Img.PNG", "small.jpg" }),
+    Check(stats.Converted == 4 &&
+          names2.SequenceEqual(new[]
+          { "PHOTO_ABC.JPG", "Sample_Img.PNG", "shot.webp", "small.jpg" }),
           $"{algo} + 名前変更なし: {string.Join(", ", names2)}");
 }
 
@@ -124,6 +139,100 @@ using (var img = Image.Load(Path.Combine(outKeep, "photo_xyz_s.jpg")))
     if (img.Metadata.ExifProfile?.TryGetValue(ExifTag.Make, out var v) == true)
         make = v.Value;
     Check(make == "TestMaker", $"削除オフ時はEXIF保持: Make={make}");
+}
+
+// ---- 6回目: 出力形式を JPG に統一（透過PNG / WEBP → JPG） ----
+string outJpg = Path.Combine(baseDir, "out_jpg");
+stats = Run(outJpg, Opts(format: OutputFormat.Jpeg));
+var namesJpg = Directory.GetFiles(outJpg).Select(Path.GetFileName).OrderBy(n => n).ToArray();
+Check(stats.Converted == 4 &&
+      namesJpg.SequenceEqual(new[]
+      { "photo_xyz_s.jpg", "sample_img_s.jpg", "shot_s.jpg", "small_s.jpg" }),
+      $"出力形式JPG（拡張子が .jpg に統一）: {string.Join(", ", namesJpg)}");
+using (var img = Image.Load<Rgb24>(Path.Combine(outJpg, "sample_img_s.jpg")))
+{
+    Check(img.Width == 505 && img.Height == 1200,
+          $"PNG→JPG 長辺1200: {img.Width}x{img.Height}");
+    // 半透明の緑(0,255,0,128) を白に合成 → おおよそ (127,255,127)。
+    // 黒で塗りつぶすと R/B が 0 付近になるため、白合成の確認になる。
+    var px = img[img.Width / 2, img.Height / 2];
+    Check(px.R > 100 && px.B > 100,
+          $"PNG→JPG は透過を白で塗りつぶす: ({px.R},{px.G},{px.B})");
+}
+using (var img = Image.Load<Rgb24>(Path.Combine(outJpg, "shot_s.jpg")))
+{
+    Check(img.Width == 1200 && img.Height == 600,
+          $"WEBP→JPG 長辺1200: {img.Width}x{img.Height}");
+    var px = img[img.Width / 2, img.Height / 2];
+    Check(px.R > 100 && px.B > 100,
+          $"WEBP→JPG は透過を白で塗りつぶす: ({px.R},{px.G},{px.B})");
+}
+
+// ---- 7回目: 出力形式 PNG + サイズ変更なし（フォーマット変換のみ） ----
+string outPng = Path.Combine(baseDir, "out_png_keep");
+stats = Run(outPng, Opts(longEdge: Converter.KeepSize, format: OutputFormat.Png));
+var namesPng = Directory.GetFiles(outPng).Select(Path.GetFileName).OrderBy(n => n).ToArray();
+Check(stats.Converted == 4 &&
+      namesPng.SequenceEqual(new[]
+      { "photo_xyz_s.png", "sample_img_s.png", "shot_s.png", "small_s.png" }),
+      $"出力形式PNG（拡張子が .png に統一）: {string.Join(", ", namesPng)}");
+using (var img = Image.Load(Path.Combine(outPng, "photo_xyz_s.png")))
+    Check(img.Width == 2000 && img.Height == 1000,
+          $"サイズ変更なしは元寸法のまま: {img.Width}x{img.Height}");
+using (var img = Image.Load(Path.Combine(outPng, "sample_img_s.png")))
+    Check(img.Metadata.GetPngMetadata().ColorType == PngColorType.RgbWithAlpha,
+          $"PNG出力では透過を保持: {img.Metadata.GetPngMetadata().ColorType}");
+using (var img = Image.Load<Rgba32>(Path.Combine(outPng, "shot_s.png")))
+{
+    Check(img.Width == 1400 && img.Height == 700,
+          $"WEBP→PNG サイズ変更なし: {img.Width}x{img.Height}");
+    Check(img[img.Width / 2, img.Height / 2].A < 200,
+          $"WEBP→PNG は透過を保持: A={img[img.Width / 2, img.Height / 2].A}");
+}
+
+// ---- 8回目: 出力形式 WEBP に統一（JPG/PNG → WEBP） ----
+string outWebp = Path.Combine(baseDir, "out_webp");
+stats = Run(outWebp, Opts(format: OutputFormat.Webp));
+var namesWebp = Directory.GetFiles(outWebp).Select(Path.GetFileName).OrderBy(n => n).ToArray();
+Check(stats.Converted == 4 &&
+      namesWebp.SequenceEqual(new[]
+      { "photo_xyz_s.webp", "sample_img_s.webp", "shot_s.webp", "small_s.webp" }),
+      $"出力形式WEBP（拡張子が .webp に統一）: {string.Join(", ", namesWebp)}");
+using (var img = Image.Load(Path.Combine(outWebp, "photo_xyz_s.webp")))
+{
+    Check(img.Width == 1200 && img.Height == 600,
+          $"JPG→WEBP 長辺1200: {img.Width}x{img.Height}");
+    Check(img.Metadata.DecodedImageFormat is WebpFormat,
+          $"WEBP として保存されている: {img.Metadata.DecodedImageFormat?.Name}");
+}
+
+// ---- 9回目: アニメーションWEBPは先頭フレームだけの静止画になる ----
+// （フレームを残すと PNG 出力が APNG になり、Python 版と挙動が食い違う）
+{
+    string animIn = Path.Combine(baseDir, "anim_in");
+    Directory.CreateDirectory(animIn);
+    using (var img = new Image<Rgba32>(900, 600, new Rgba32(255, 0, 0, 255)))
+    {
+        using var f2 = new Image<Rgba32>(900, 600, new Rgba32(0, 255, 0, 255));
+        img.Frames.AddFrame(f2.Frames.RootFrame);
+        img.Save(Path.Combine(animIn, "anim.webp"), new WebpEncoder());
+    }
+    using (var img = Image.Load(Path.Combine(animIn, "anim.webp")))
+        Check(img.Frames.Count == 2, $"入力はアニメーションWEBP: {img.Frames.Count}フレーム");
+
+    foreach (var (fmt, name) in new[]
+             { (OutputFormat.Keep, "anim.webp"), (OutputFormat.Png, "anim.png"),
+               (OutputFormat.Jpeg, "anim.jpg") })
+    {
+        string animOut = Path.Combine(baseDir, "anim_out_" + fmt);
+        Converter.ProcessFolder(animIn, animOut,
+            Opts(longEdge: Converter.KeepSize, lowercase: false, search: "", with: "",
+                 suffix: "", format: fmt),
+            _ => { }, (_, _) => { });
+        using var img = Image.Load(Path.Combine(animOut, name));
+        Check(img.Frames.Count == 1,
+              $"アニメーションWEBP→{fmt} は1フレーム: {img.Frames.Count}");
+    }
 }
 
 // ================ Combiner / Cropper（連結・切り抜き）のテスト ================

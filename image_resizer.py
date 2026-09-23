@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""JPG/PNG 一括リサイズツール
+"""JPG/PNG/WEBP 一括リサイズ・フォーマット変換ツール
 
-フォルダ内の JPG/PNG を長辺指定でリサイズし、別フォルダへ出力する。
-ファイル名の小文字化・置換・末尾文字列付与を変換と同時に行える。
+フォルダ内の JPG/PNG/WEBP を長辺指定でリサイズし、別フォルダへ出力する。
+出力フォーマット（JPG / PNG / WEBP）の変換、ファイル名の小文字化・置換・
+末尾文字列付与を変換と同時に行える。
 """
 
 import threading
@@ -15,12 +16,15 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 
 from PIL import Image, ImageOps
 
-APP_TITLE = "画像リサイズ変換（JPG / PNG）"
+APP_TITLE = "画像リサイズ・フォーマット変換（JPG / PNG / WEBP）"
 
 SIZE_PRESETS = [1600, 1200, 600, 560]
 
 # 「任意」ラジオボタンを表す値（プリセットと重複しない番兵値）
 CUSTOM_SIZE = 0
+
+# 「サイズを変更しない」を表す値（フォーマット変換だけを行いたい場合に使う）
+KEEP_SIZE = -1
 
 # 長辺として指定できる最大値（JPEG 形式の上限に合わせる）
 MAX_LONG_EDGE = 65500
@@ -31,9 +35,20 @@ RESAMPLE_METHODS = {
     "Lanczos": Image.LANCZOS,
 }
 
-TARGET_EXTS = {".jpg", ".jpeg", ".png"}
+TARGET_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+
+# 出力フォーマット（KEEP は元ファイルの拡張子をそのまま使う）
+FORMAT_KEEP = "keep"
+FORMAT_JPEG = "jpeg"
+FORMAT_PNG = "png"
+FORMAT_WEBP = "webp"
+
+FORMAT_LABELS = [("元のまま", FORMAT_KEEP), ("JPG", FORMAT_JPEG),
+                 ("PNG", FORMAT_PNG), ("WEBP", FORMAT_WEBP)]
+FORMAT_EXTS = {FORMAT_JPEG: ".jpg", FORMAT_PNG: ".png", FORMAT_WEBP: ".webp"}
 
 JPEG_QUALITY = 90
+WEBP_QUALITY = 90
 
 
 @dataclass
@@ -47,6 +62,7 @@ class ConvertOptions:
     overwrite: bool          # True=上書き / False=スキップ
     no_upscale: bool         # 長辺が指定値より小さい画像は拡大しない
     strip_metadata: bool = True  # EXIF・コメント等のメタデータを削除する
+    out_format: str = FORMAT_KEEP  # 出力フォーマット（FORMAT_* のいずれか）
 
 
 def build_dest_name(src: Path, opts: ConvertOptions) -> str:
@@ -55,15 +71,24 @@ def build_dest_name(src: Path, opts: ConvertOptions) -> str:
     if opts.replace_search:
         stem = stem.replace(opts.replace_search, opts.replace_with)
     stem += opts.suffix
-    ext = src.suffix
+    ext = FORMAT_EXTS.get(opts.out_format, src.suffix)
     if opts.lowercase:
         stem = stem.lower()
         ext = ext.lower()
     return stem + ext
 
 
+def describe_options(opts: ConvertOptions, algo_name: str) -> str:
+    """ログ見出し用に、サイズ・形式・アルゴリズムを1行にまとめる。"""
+    size = "サイズ変更なし" if opts.long_edge == KEEP_SIZE else f"長辺{opts.long_edge}px"
+    fmt = next(label for label, value in FORMAT_LABELS if value == opts.out_format)
+    return f"{size} / 形式{fmt} / {algo_name}"
+
+
 def resize_image(img: Image.Image, opts: ConvertOptions) -> Image.Image:
     """長辺を指定サイズに合わせてリサイズする。"""
+    if opts.long_edge == KEEP_SIZE:
+        return img
     w, h = img.size
     long_now = max(w, h)
     if long_now == opts.long_edge:
@@ -73,6 +98,18 @@ def resize_image(img: Image.Image, opts: ConvertOptions) -> Image.Image:
     scale = opts.long_edge / long_now
     new_size = (max(1, round(w * scale)), max(1, round(h * scale)))
     return img.resize(new_size, opts.resample)
+
+
+def flatten_for_jpeg(img: Image.Image) -> Image.Image:
+    """JPEG は透過を扱えないため、透過部分を白で塗りつぶして不透明化する。"""
+    if img.mode in ("RGB", "L"):
+        return img
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.split()[3])
+        return bg
+    return img.convert("RGB")
 
 
 def convert_one(src: Path, dst: Path, opts: ConvertOptions) -> str:
@@ -86,6 +123,13 @@ def convert_one(src: Path, dst: Path, opts: ConvertOptions) -> str:
         img.load()
         out = resize_image(img, opts)
 
+        # 出力拡張子で保存形式が決まる（build_dest_name が out_format を反映済み）
+        ext = dst.suffix.lower()
+        to_jpeg = ext in (".jpg", ".jpeg")
+        if to_jpeg:
+            # 透過の判定に info を使うため、メタデータを落とす前に行う
+            out = flatten_for_jpeg(out)
+
         save_kwargs = {}
         icc = img.info.get("icc_profile")
         if icc:
@@ -98,11 +142,11 @@ def convert_one(src: Path, dst: Path, opts: ConvertOptions) -> str:
         elif img.info.get("exif"):
             save_kwargs["exif"] = img.info["exif"]
 
-        if dst.suffix.lower() in (".jpg", ".jpeg"):
-            if out.mode not in ("RGB", "L"):
-                out = out.convert("RGB")
+        if to_jpeg:
             out.save(dst, format="JPEG", quality=JPEG_QUALITY,
                      optimize=True, **save_kwargs)
+        elif ext == ".webp":
+            out.save(dst, format="WEBP", quality=WEBP_QUALITY, **save_kwargs)
         else:
             out.save(dst, format="PNG", optimize=True, **save_kwargs)
 
@@ -110,7 +154,7 @@ def convert_one(src: Path, dst: Path, opts: ConvertOptions) -> str:
 
 
 def collect_targets(folder: Path) -> list[Path]:
-    """フォルダ直下の JPG/PNG を列挙する。"""
+    """フォルダ直下の JPG/PNG/WEBP を列挙する。"""
     return sorted(
         p for p in folder.iterdir()
         if p.is_file() and p.suffix.lower() in TARGET_EXTS
@@ -201,9 +245,21 @@ class App(tk.Tk):
                                  width=7, justify="right")
         custom_entry.pack(side="left")
         ttk.Label(size_row, text="px").pack(side="left", padx=(2, 6))
+        ttk.Radiobutton(size_row, text="変更しない", value=KEEP_SIZE,
+                        variable=self.size_var).pack(side="left", padx=6)
         # 入力欄に触れたら自動で「任意」を選択する
         custom_entry.bind("<FocusIn>",
                           lambda _e: self.size_var.set(CUSTOM_SIZE))
+
+        fmt_row = ttk.Frame(conv)
+        fmt_row.pack(fill="x", **pad)
+        ttk.Label(fmt_row, text="出力形式:").pack(side="left")
+        self.format_var = tk.StringVar(value=FORMAT_KEEP)
+        for label, value in FORMAT_LABELS:
+            ttk.Radiobutton(fmt_row, text=label, value=value,
+                            variable=self.format_var).pack(side="left", padx=6)
+        ttk.Label(fmt_row, text="（JPGへの変換では透過部分を白で塗りつぶします）").pack(
+            side="left", padx=(6, 0))
 
         algo_row = ttk.Frame(conv)
         algo_row.pack(fill="x", **pad)
@@ -329,6 +385,7 @@ class App(tk.Tk):
             overwrite=self.overwrite_var.get(),
             no_upscale=self.no_upscale_var.get(),
             strip_metadata=self.strip_meta_var.get(),
+            out_format=self.format_var.get(),
         )
 
         if (in_dir.resolve() == out_dir.resolve() and opts.overwrite):
@@ -342,7 +399,7 @@ class App(tk.Tk):
         self.run_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         self.status_var.set("処理中...")
-        self._log(f"=== 変換開始: 長辺{opts.long_edge}px / {self.algo_var.get()} ===")
+        self._log(f"=== 変換開始: {describe_options(opts, self.algo_var.get())} ===")
 
         def report(kind, *args):
             self.msg_queue.put((kind, args))
