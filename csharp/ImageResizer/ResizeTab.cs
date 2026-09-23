@@ -17,6 +17,11 @@ public class ResizeTab : TabPage
         Width = 70, TextAlign = HorizontalAlignment.Right,
         Margin = new Padding(0, 1, 2, 3),
     };
+    private readonly RadioButton _rbKeepSize = new()
+    {
+        Text = "変更しない", AutoSize = true, Margin = new Padding(6, 3, 6, 3),
+    };
+    private readonly List<(RadioButton Rb, OutputFormat Value)> _formatRadios = new();
     private readonly List<(RadioButton Rb, string Name)> _algoRadios = new();
     private readonly CheckBox _chkNoUpscale = new()
     {
@@ -152,8 +157,24 @@ public class ResizeTab : TabPage
         {
             Text = "px", AutoSize = true, Margin = new Padding(0, 6, 6, 3),
         });
+        sizeRow.Controls.Add(_rbKeepSize);
         // 入力欄に触れたら自動で「任意」を選択する
         _numCustomSize.Enter += (_, _) => _rbCustomSize.Checked = true;
+
+        var formatRow = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Dock = DockStyle.Fill };
+        formatRow.Controls.Add(MakeLabel("出力形式:"));
+        foreach (var (label, value) in Converter.FormatLabels)
+        {
+            var rb = new RadioButton
+            {
+                Text = label, AutoSize = true,
+                Checked = value == OutputFormat.Keep,
+                Margin = new Padding(6, 3, 6, 3),
+            };
+            _formatRadios.Add((rb, value));
+            formatRow.Controls.Add(rb);
+        }
+        formatRow.Controls.Add(MakeLabel("（JPGへの変換では透過部分を白で塗りつぶします）"));
 
         var algoRow = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Dock = DockStyle.Fill };
         algoRow.Controls.Add(MakeLabel("アルゴリズム:"));
@@ -170,6 +191,7 @@ public class ResizeTab : TabPage
         }
 
         stack.Controls.Add(sizeRow);
+        stack.Controls.Add(formatRow);
         stack.Controls.Add(algoRow);
         stack.Controls.Add(_chkNoUpscale);
         stack.Controls.Add(_chkStripMeta);
@@ -294,9 +316,11 @@ public class ResizeTab : TabPage
         }
 
         string algoName = _algoRadios.First(a => a.Rb.Checked).Name;
-        int longEdge = _rbCustomSize.Checked
-            ? (int)_numCustomSize.Value
-            : _sizeRadios.First(s => s.Rb.Checked).Size;
+        int longEdge = _rbKeepSize.Checked
+            ? Converter.KeepSize
+            : _rbCustomSize.Checked
+                ? (int)_numCustomSize.Value
+                : _sizeRadios.First(s => s.Rb.Checked).Size;
         var opts = new ConvertOptions
         {
             LongEdge = longEdge,
@@ -308,6 +332,7 @@ public class ResizeTab : TabPage
             Overwrite = _rbOverwrite.Checked,
             NoUpscale = _chkNoUpscale.Checked,
             StripMetadata = _chkStripMeta.Checked,
+            Format = _formatRadios.First(f => f.Rb.Checked).Value,
         };
 
         if (opts.Overwrite &&
@@ -327,7 +352,7 @@ public class ResizeTab : TabPage
         _btnRun.Enabled = false;
         _btnCancel.Enabled = true;
         _lblStatus.Text = "処理中...";
-        Log($"=== 変換開始: 長辺{opts.LongEdge}px / {algoName} ===");
+        Log($"=== 変換開始: {Converter.DescribeOptions(opts)} ===");
 
         try
         {

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """画像ツール（リサイズ・切り抜き・連結）
 
-- リサイズ: フォルダ内の JPG/PNG を長辺指定で一括リサイズする
-  （従来ツール image_resizer.py の処理コアをタブとして統合）。
+- リサイズ: フォルダ内の JPG/PNG/WEBP を長辺指定で一括リサイズし、出力形式を
+  JPG / PNG / WEBP へ変換する（従来ツール image_resizer.py の処理コアをタブとして統合）。
 - 切り抜き: 画像をマウスで範囲選択し、自由 / 固定 / 任意のアスペクト比で
   クロップして保存する。
 - 連結: 複数の画像を横・縦・グリッドに1枚へ連結する（間隔・余白・背景色・
@@ -858,8 +858,20 @@ class ResizeTab(ttk.Frame):
                                  width=7, justify="right")
         custom_entry.pack(side="left")
         ttk.Label(size_row, text="px").pack(side="left", padx=(2, 6))
+        ttk.Radiobutton(size_row, text="変更しない", value=R.KEEP_SIZE,
+                        variable=self.size_var).pack(side="left", padx=6)
         custom_entry.bind("<FocusIn>",
                           lambda _e: self.size_var.set(R.CUSTOM_SIZE))
+
+        fmt_row = ttk.Frame(conv)
+        fmt_row.pack(fill="x", **pad)
+        ttk.Label(fmt_row, text="出力形式:").pack(side="left")
+        self.format_var = tk.StringVar(value=R.FORMAT_KEEP)
+        for label, value in R.FORMAT_LABELS:
+            ttk.Radiobutton(fmt_row, text=label, value=value,
+                            variable=self.format_var).pack(side="left", padx=6)
+        ttk.Label(fmt_row, text="（JPGへの変換では透過部分を白で塗りつぶします）").pack(
+            side="left", padx=(6, 0))
 
         algo_row = ttk.Frame(conv)
         algo_row.pack(fill="x", **pad)
@@ -977,6 +989,7 @@ class ResizeTab(ttk.Frame):
             overwrite=self.overwrite_var.get(),
             no_upscale=self.no_upscale_var.get(),
             strip_metadata=self.strip_meta_var.get(),
+            out_format=self.format_var.get(),
         )
 
         if (in_dir.resolve() == out_dir.resolve() and opts.overwrite):
@@ -990,7 +1003,7 @@ class ResizeTab(ttk.Frame):
         self.run_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         self.status_var.set("処理中...")
-        self._log(f"=== 変換開始: 長辺{opts.long_edge}px / {self.algo_var.get()} ===")
+        self._log(f"=== 変換開始: {R.describe_options(opts, self.algo_var.get())} ===")
 
         def report(kind, *args):
             self.msg_queue.put((kind, args))
